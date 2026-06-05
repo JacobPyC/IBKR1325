@@ -429,10 +429,24 @@ def extract_trades_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slas
     return closed_lots_list, inds_sorted_close_dates, cpi_extraction_succeeded
 
 
+def _get_statement_year(csv_file):
+    """Extract the statement year from the Period row in the CSV header."""
+    with open(csv_file, 'r') as f:
+        for row in csv.reader(f):
+            if len(row) >= 4 and row[0] == 'Statement' and row[2] == 'Period':
+                # e.g. 'January 1, 2025 - December 31, 2025'
+                import re
+                years = re.findall(r'\d{4}', row[3])
+                if years:
+                    return int(years[-1])  # use end year
+    return None
+
+
 def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
     csv_file = _csv_path(file_dir, csv_file_name)
     rate_provider = ExchangeRateProvider()
     col_names = get_dividends_col_names(csv_file)
+    statement_year = _get_statement_year(csv_file)
 
     if col_names:
         with open(csv_file, 'r') as read_obj:
@@ -492,21 +506,34 @@ def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_s
                         'withholding_tax': wh['amount'],
                     })
 
-        # Sort by date so standalone withholding entries appear in chronological order
-        dividends_list.sort(key=lambda d: d['datetime'])
 
-        for dividend_dict in dividends_list:
-            dividend_dict['currency_factor'] = rate_provider.get_rate(
-                dividend_dict['currency'], dividend_dict['datetime'])
-            dividend_dict['dividend'] = dividend_dict['amount']
-            dividend_dict['dividend_ILS'] = dividend_dict['dividend'] * dividend_dict['currency_factor']
-            dividend_dict['withholding_tax_ILS'] = dividend_dict['withholding_tax'] * dividend_dict['currency_factor']
+        # Separate prior-year withholding entries (date year != statement year).
+        # These are typically refunds (negative) or corrections for a different tax year.
+        prior_year_withholding = []
+        current_year_list = []
+        for d in dividends_list:
+            if statement_year and d["datetime"].year != statement_year:
+                prior_year_withholding.append(d)
+            else:
+                current_year_list.append(d)
+        dividends_list = current_year_list
 
-        return dividends_list
+        # Sort by date
+        dividends_list.sort(key=lambda d: d["datetime"])
+        prior_year_withholding.sort(key=lambda d: d["datetime"])
+
+        for dividend_dict in dividends_list + prior_year_withholding:
+            dividend_dict["currency_factor"] = rate_provider.get_rate(
+                dividend_dict["currency"], dividend_dict["datetime"])
+            dividend_dict["dividend"] = dividend_dict["amount"]
+            dividend_dict["dividend_ILS"] = dividend_dict["dividend"] * dividend_dict["currency_factor"]
+            dividend_dict["withholding_tax_ILS"] = dividend_dict["withholding_tax"] * dividend_dict["currency_factor"]
+
+        return dividends_list, prior_year_withholding
 
     else:
-        print('no dividends exist in the file.')
-        return []
+        print("no dividends exist in the file.")
+        return [], []
 
 
 def extract_other_fees_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
@@ -839,7 +866,8 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
 
 
 def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
-                         dividends_list, cpi_extraction_succeeded, other_fees_data):
+                         dividends_list, cpi_extraction_succeeded, other_fees_data,
+                         prior_year_withholding=None):
     template_file = os.path.dirname(os.path.abspath(__file__)) + '/tax_forms_template.xlsx'
     xfile = openpyxl.load_workbook(template_file)
 
@@ -898,6 +926,31 @@ def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_
         _style_totals_row(sheet, year_row, DIV_COL_START, DIV_COL_END,
                           PatternFill(start_color='BFBFBF', end_color='BFBFBF', fill_type='solid'))
 
+        # Prior-year withholding refunds section
+        if prior_year_withholding:
+            _PRIOR_FILL = PatternFill(start_color='7B3F00', end_color='7B3F00', fill_type='solid')
+            _PRIOR_TOTALS_FILL = PatternFill(start_color='FDF3E7', end_color='FDF3E7', fill_type='solid')
+            pyw_header = year_row + 2
+            _style_header_row(sheet, pyw_header, DIV_COL_START, DIV_COL_END,
+                              'החזר ניכוי מס במקור משנים קודמות', _PRIOR_FILL)
+            pyw_row = pyw_header + 1
+            total_pyw_tax_ILS = 0
+            for i, d in enumerate(prior_year_withholding):
+                sheet['B' + str(pyw_row)] = i + 1
+                sheet['C' + str(pyw_row)] = d['date']
+                sheet['D' + str(pyw_row)] = d['ticker']
+                sheet['E' + str(pyw_row)] = d['currency']
+                sheet['F' + str(pyw_row)] = d['dividend']
+                sheet['G' + str(pyw_row)] = d['withholding_tax']
+                sheet['H' + str(pyw_row)] = d['currency_factor']
+                sheet['I' + str(pyw_row)] = d['dividend_ILS']
+                sheet['J' + str(pyw_row)] = d['withholding_tax_ILS']
+                total_pyw_tax_ILS += d['withholding_tax_ILS']
+                pyw_row += 1
+            sheet['B' + str(pyw_row)] = 'סה"כ החזר ניכוי מס במקור משנים קודמות'
+            sheet['J' + str(pyw_row)] = round_half_up(total_pyw_tax_ILS)
+            _style_totals_row(sheet, pyw_row, DIV_COL_START, DIV_COL_END, _PRIOR_TOTALS_FILL)
+
     # Other Fees & Interest sheet
     _write_other_fees_sheet(xfile, other_fees_data)
 
@@ -925,16 +978,18 @@ def _extract_all(file_dir, csv_file_name, verbosity, date_slash_format):
 
 def generate_tax_forms(file_dir, csv_file_name, verbosity=0):
     try:
-        trades, dividends, fees = _extract_all(
+        trades, dividends_result, fees = _extract_all(
             file_dir, csv_file_name, verbosity, 'normal')
     except ValueError:
         print("*** failed to use date_slash_format='normal', attempting date_slash_format='USA'")
-        trades, dividends, fees = _extract_all(
+        trades, dividends_result, fees = _extract_all(
             file_dir, csv_file_name, verbosity, 'USA')
 
     closed_lots_list, inds_sorted_close_dates, cpi_extraction_succeeded = trades
+    dividends_list, prior_year_withholding = dividends_result
     write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
-                         dividends, cpi_extraction_succeeded, fees)
+                         dividends_list, cpi_extraction_succeeded, fees,
+                         prior_year_withholding=prior_year_withholding)
     print('Finished generating tax forms.')
 
 
