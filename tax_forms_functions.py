@@ -438,6 +438,7 @@ def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_s
         with open(csv_file, 'r') as read_obj:
             csv_reader = csv.reader(read_obj)
             dividends_list = []
+            unmatched_withholding = []  # (event_dict,) for withholding with no dividend match
             for row in csv_reader:
                 if verbosity == 1:
                     print(row)
@@ -460,11 +461,39 @@ def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_s
                                 event_dict['withholding_tax'] = 0
                                 dividends_list.append(event_dict)
                         elif row[col_names['main']] == 'Withholding Tax':
+                            matched = False
                             for dividend_dict in dividends_list:
                                 if (dividend_dict['ticker'] == event_dict['ticker']
                                         and dividend_dict['date'] == event_dict['date']):
                                     dividend_dict['withholding_tax'] += event_dict['amount']
+                                    matched = True
                                     break
+                            if not matched:
+                                unmatched_withholding.append(event_dict)
+
+            # Insert standalone entries for unmatched withholding rows
+            for wh in unmatched_withholding:
+                # Check again — maybe a dividend was added later in the loop (shouldn't happen but be safe)
+                already_covered = any(
+                    d['ticker'] == wh['ticker'] and d['date'] == wh['date']
+                    for d in dividends_list
+                )
+                if already_covered:
+                    for d in dividends_list:
+                        if d['ticker'] == wh['ticker'] and d['date'] == wh['date']:
+                            d['withholding_tax'] += wh['amount']
+                else:
+                    dividends_list.append({
+                        'currency':       wh['currency'],
+                        'datetime':       wh['datetime'],
+                        'date':           wh['date'],
+                        'ticker':         wh['ticker'],
+                        'amount':         0,
+                        'withholding_tax': wh['amount'],
+                    })
+
+        # Sort by date so standalone withholding entries appear in chronological order
+        dividends_list.sort(key=lambda d: d['datetime'])
 
         for dividend_dict in dividends_list:
             dividend_dict['currency_factor'] = rate_provider.get_rate(
