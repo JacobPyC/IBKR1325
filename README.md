@@ -16,7 +16,7 @@ In your Interactive Brokers user area, go to "Performance & Reports" > "Statemen
 Under "Custom Statements", create a new custom statement, call it "Israel Tax Info" or something similar, and select the following sections:  
 Account Information, Cash Report, Trades, Combined Dividends, Combined Interest, Combined Fees, Withholding Tax,Commission Details
 
-If you short stocks, also include symbol-level borrow fee details when available. Aggregate borrow-fee rows cannot be safely allocated to specific short lots.
+If you short stocks, also include symbol-level borrow fee details when available. Aggregate borrow-fee rows cannot be safely allocated to specific short lots .
 
 Select "No" in all the Yes/No options.
 Then you can generate it every time you need it for the date range of interest.
