@@ -536,6 +536,74 @@ def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_s
         return [], []
 
 
+def extract_prior_year_withholding_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
+    """
+    Extract Withholding Tax rows that have no matching Dividend row in the same CSV.
+    These are prior-year withholding taxes that appear in the current tax year's report
+    (IBKR sometimes reports them with a delay), and should be shown in a separate table.
+    Returns a list of dicts: {date, datetime, ticker, currency, amount, rate, amount_ils}
+    """
+    csv_file = _csv_path(file_dir, csv_file_name)
+    rate_provider = ExchangeRateProvider()
+    col_names = get_dividends_col_names(csv_file)
+
+    if not col_names:
+        return []
+
+    # Collect all dividend (ticker, date) pairs and all withholding tax rows
+    dividend_keys = set()
+    all_wht_rows = []
+
+    with open(csv_file, 'r') as read_obj:
+        csv_reader = csv.reader(read_obj)
+        for row in csv_reader:
+            if verbosity == 1:
+                print(row)
+            if row[col_names['header']] != 'Data':
+                continue
+            currency = row[col_names['currency']]
+            if 'Total' in currency or not currency.strip():
+                continue
+            datetime_string = row[col_names['datetime']]
+            try:
+                date_format = get_date_format(datetime_string, date_slash_format=date_slash_format)
+                dt = datetime.datetime.strptime(datetime_string, date_format)
+            except (ValueError, KeyError):
+                continue
+            date_str = dt.strftime("%d/%m/%Y")
+            ticker = row[col_names['ticker']].split('(')[0].strip()
+            amount = float(row[col_names['amount']])
+            main = row[col_names['main']]
+
+            if main == 'Dividends':
+                dividend_keys.add((ticker, date_str))
+            elif main == 'Withholding Tax':
+                all_wht_rows.append({
+                    'ticker': ticker,
+                    'date': date_str,
+                    'datetime': dt,
+                    'currency': currency,
+                    'amount': amount,
+                })
+
+    # Keep only withholding tax rows with no matching dividend in this CSV
+    prior_year_wht = []
+    for wht in all_wht_rows:
+        if (wht['ticker'], wht['date']) not in dividend_keys:
+            rate = rate_provider.get_rate(wht['currency'], wht['datetime'])
+            prior_year_wht.append({
+                'date': wht['date'],
+                'datetime': wht['datetime'],
+                'ticker': wht['ticker'],
+                'currency': wht['currency'],
+                'amount': wht['amount'],
+                'rate': rate,
+                'amount_ils': wht['amount'] * rate,
+            })
+
+    return prior_year_wht
+
+
 def extract_other_fees_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
     """
     Extract individual fee and interest rows from the IB CSV.
@@ -763,6 +831,49 @@ def _write_dividends_half(sheet, dividends_list, half_label, start_row):
         ind_line += 1
 
     return start_row + ind_line, total_dividends_ILS, withholding_tax_ILS
+
+
+def _write_prior_year_withholding_table(sheet, prior_year_wht, start_row, col_start=2, col_end=10):
+    """
+    Write a table of prior-year withholding taxes (recovered in the current year)
+    onto the Dividends sheet, starting at start_row.
+    Columns: B=index, C=date, D=ticker, E=currency, F=amount(USD), G=rate, H=amount(ILS), total row.
+    """
+    from openpyxl.styles import Border, Side
+
+    PRIOR_FILL  = PatternFill(start_color='6B3A1F', end_color='6B3A1F', fill_type='solid')
+    TOTAL_FILL  = PatternFill(start_color='F4EAE8', end_color='F4EAE8', fill_type='solid')
+
+    thin = Side(style='thin')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    _style_header_row(sheet, start_row, col_start, col_end,
+                      'מס במקור שנים קודמות (Prior-Year Withholding Tax)', PRIOR_FILL)
+
+    data_start = start_row + 1
+    total_ils = 0
+
+    for i, wht in enumerate(prior_year_wht):
+        row = data_start + i
+        sheet[f'B{row}'] = i + 1
+        sheet[f'C{row}'] = wht['date']
+        sheet[f'D{row}'] = wht['ticker']
+        sheet[f'E{row}'] = wht['currency']
+        sheet[f'F{row}'] = abs(wht['amount'])
+        sheet[f'H{row}'] = wht['rate']
+        sheet[f'I{row}'] = abs(round_half_up(wht['amount_ils']))
+        for col in ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+            sheet[f'{col}{row}'].border = border
+        total_ils += abs(wht['amount_ils'])
+
+    total_row = data_start + len(prior_year_wht)
+    sheet[f'B{total_row}'] = 'סה"כ מס במקור שנים קודמות'
+    sheet[f'I{total_row}'] = round_half_up(total_ils)
+    _style_totals_row(sheet, total_row, col_start, col_end, TOTAL_FILL)
+    for col in ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']:
+        sheet[f'{col}{total_row}'].border = border
+
+    return total_row + 1
 
 
 def _write_other_fees_sheet(xfile, other_fees_data):
