@@ -430,72 +430,21 @@ def extract_trades_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slas
 
 
 def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
-    csv_file = _csv_path(file_dir, csv_file_name)
-    rate_provider = ExchangeRateProvider()
-    col_names = get_dividends_col_names(csv_file)
-
-    if col_names:
-        with open(csv_file, 'r') as read_obj:
-            csv_reader = csv.reader(read_obj)
-            dividends_list = []
-            for row in csv_reader:
-                if verbosity == 1:
-                    print(row)
-                if row[col_names['main']] in ['Dividends', 'Withholding Tax'] and row[col_names['header']] == 'Data':
-                    event_dict = {}
-                    event_dict['currency'] = row[col_names['currency']]
-                    if 'Total' not in event_dict['currency']:
-                        datetime_string = row[col_names['datetime']]
-                        date_format = get_date_format(datetime_string, date_slash_format=date_slash_format)
-                        event_dict['datetime'] = datetime.datetime.strptime(datetime_string, date_format)
-                        event_dict['date'] = event_dict['datetime'].strftime("%d/%m/%Y")
-                        event_dict['ticker'] = row[col_names['ticker']].split('(')[0]
-                        event_dict['amount'] = float(row[col_names['amount']])
-                        if row[col_names['main']] == 'Dividends':
-                            if (len(dividends_list) > 0
-                                    and dividends_list[-1]['ticker'] == event_dict['ticker']
-                                    and dividends_list[-1]['date'] == event_dict['date']):
-                                dividends_list[-1]['amount'] += event_dict['amount']
-                            else:
-                                event_dict['withholding_tax'] = 0
-                                dividends_list.append(event_dict)
-                        elif row[col_names['main']] == 'Withholding Tax':
-                            for dividend_dict in dividends_list:
-                                if (dividend_dict['ticker'] == event_dict['ticker']
-                                        and dividend_dict['date'] == event_dict['date']):
-                                    dividend_dict['withholding_tax'] += event_dict['amount']
-                                    break
-
-        for dividend_dict in dividends_list:
-            dividend_dict['currency_factor'] = rate_provider.get_rate(
-                dividend_dict['currency'], dividend_dict['datetime'])
-            dividend_dict['dividend'] = dividend_dict['amount']
-            dividend_dict['dividend_ILS'] = dividend_dict['dividend'] * dividend_dict['currency_factor']
-            dividend_dict['withholding_tax_ILS'] = dividend_dict['withholding_tax'] * dividend_dict['currency_factor']
-
-        return dividends_list
-
-    else:
-        print('no dividends exist in the file.')
-        return []
-
-
-def extract_prior_year_withholding_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
     """
-    Extract Withholding Tax rows that have no matching Dividend row in the same CSV.
-    These are prior-year withholding taxes that appear in the current tax year's report
-    (IBKR sometimes reports them with a delay), and should be shown in a separate table.
-    Returns a list of dicts: {date, datetime, ticker, currency, amount, rate, amount_ils}
+    Single-pass extraction of Dividends and Withholding Tax rows.
+    Returns (dividends_list, unmatched_wht):
+      - dividends_list: current-year dividends with WHT attached
+      - unmatched_wht: WHT rows with no matching dividend (no matching dividend in this CSV)
     """
     csv_file = _csv_path(file_dir, csv_file_name)
     rate_provider = ExchangeRateProvider()
     col_names = get_dividends_col_names(csv_file)
 
     if not col_names:
-        return []
+        print('no dividends exist in the file.')
+        return [], []
 
-    # Collect all dividend (ticker, date) pairs and all withholding tax rows
-    dividend_keys = set()
+    dividends_list = []
     all_wht_rows = []
 
     with open(csv_file, 'r') as read_obj:
@@ -503,51 +452,63 @@ def extract_prior_year_withholding_from_csv(file_dir, csv_file_name, verbosity=0
         for row in csv_reader:
             if verbosity == 1:
                 print(row)
-            if row[col_names['header']] != 'Data':
+            if row[col_names['main']] not in ('Dividends', 'Withholding Tax') or row[col_names['header']] != 'Data':
                 continue
             currency = row[col_names['currency']]
-            if 'Total' in currency or not currency.strip():
+            if 'Total' in currency:
                 continue
             datetime_string = row[col_names['datetime']]
-            try:
-                date_format = get_date_format(datetime_string, date_slash_format=date_slash_format)
-                dt = datetime.datetime.strptime(datetime_string, date_format)
-            except (ValueError, KeyError):
-                continue
+            date_format = get_date_format(datetime_string, date_slash_format=date_slash_format)
+            dt = datetime.datetime.strptime(datetime_string, date_format)
             date_str = dt.strftime("%d/%m/%Y")
-            ticker = row[col_names['ticker']].split('(')[0].strip()
+            ticker = row[col_names['ticker']].split('(')[0]
             amount = float(row[col_names['amount']])
-            main = row[col_names['main']]
 
-            if main == 'Dividends':
-                dividend_keys.add((ticker, date_str))
-            elif main == 'Withholding Tax':
+            if row[col_names['main']] == 'Dividends':
+                if (dividends_list
+                        and dividends_list[-1]['ticker'] == ticker
+                        and dividends_list[-1]['date'] == date_str):
+                    dividends_list[-1]['amount'] += amount
+                else:
+                    dividends_list.append({
+                        'currency': currency, 'datetime': dt, 'date': date_str,
+                        'ticker': ticker, 'amount': amount, 'withholding_tax': 0,
+                    })
+            else:  # Withholding Tax — buffer, matched after the loop
                 all_wht_rows.append({
-                    'ticker': ticker,
-                    'date': date_str,
-                    'datetime': dt,
-                    'currency': currency,
-                    'amount': amount,
+                    'ticker': ticker, 'date': date_str, 'datetime': dt,
+                    'currency': currency, 'amount': amount,
                 })
 
-    # Keep only withholding tax rows with no matching dividend in this CSV
-    prior_year_wht = []
+    dividend_keys = {(d['ticker'], d['date']) for d in dividends_list}
+
+    unmatched_wht_raw = []
     for wht in all_wht_rows:
-        if (wht['ticker'], wht['date']) not in dividend_keys:
-            rate = rate_provider.get_rate(wht['currency'], wht['datetime'])
-            prior_year_wht.append({
-                'date': wht['date'],
-                'datetime': wht['datetime'],
-                'ticker': wht['ticker'],
-                'currency': wht['currency'],
-                'amount': wht['amount'],
-                'rate': rate,
-                'amount_ils': wht['amount'] * rate,
-            })
+        if (wht['ticker'], wht['date']) in dividend_keys:
+            for d in dividends_list:
+                if d['ticker'] == wht['ticker'] and d['date'] == wht['date']:
+                    d['withholding_tax'] += wht['amount']
+                    break
+        else:
+            unmatched_wht_raw.append(wht)
 
-    return prior_year_wht
+    for d in dividends_list:
+        d['currency_factor'] = rate_provider.get_rate(d['currency'], d['datetime'])
+        d['dividend'] = d['amount']
+        d['dividend_ILS'] = d['dividend'] * d['currency_factor']
+        d['withholding_tax_ILS'] = d['withholding_tax'] * d['currency_factor']
 
+    unmatched_wht = []
+    for wht in unmatched_wht_raw:
+        rate = rate_provider.get_rate(wht['currency'], wht['datetime'])
+        unmatched_wht.append({
+            'date': wht['date'], 'datetime': wht['datetime'],
+            'ticker': wht['ticker'], 'currency': wht['currency'],
+            'amount': wht['amount'], 'rate': rate,
+            'amount_ils': wht['amount'] * rate,
+        })
 
+    return dividends_list, unmatched_wht
 def extract_other_fees_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
     """
     Extract individual fee and interest rows from the IB CSV.
@@ -777,7 +738,7 @@ def _write_dividends_half(sheet, dividends_list, half_label, start_row):
     return start_row + ind_line, total_dividends_ILS, withholding_tax_ILS
 
 
-def _write_prior_year_withholding_table(sheet, prior_year_wht, start_row, col_start=2, col_end=10):
+def _write_unmatched_wht_table(sheet, unmatched_wht, start_row, col_start=2, col_end=10):
     """
     Write a table of prior-year withholding taxes (recovered in the current year)
     onto the Dividends sheet, starting at start_row.
@@ -792,12 +753,12 @@ def _write_prior_year_withholding_table(sheet, prior_year_wht, start_row, col_st
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     _style_header_row(sheet, start_row, col_start, col_end,
-                      'מס במקור שנים קודמות (Prior-Year Withholding Tax)', PRIOR_FILL)
+                      'מס במקור ללא דיבידנד תואם (Unmatched Withholding Tax)', PRIOR_FILL)
 
     data_start = start_row + 1
     total_ils = 0
 
-    for i, wht in enumerate(prior_year_wht):
+    for i, wht in enumerate(unmatched_wht):
         row = data_start + i
         sheet[f'B{row}'] = i + 1
         sheet[f'C{row}'] = wht['date']
@@ -810,7 +771,7 @@ def _write_prior_year_withholding_table(sheet, prior_year_wht, start_row, col_st
             sheet[f'{col}{row}'].border = border
         total_ils += abs(wht['amount_ils'])
 
-    total_row = data_start + len(prior_year_wht)
+    total_row = data_start + len(unmatched_wht)
     sheet[f'B{total_row}'] = 'סה"כ מס במקור שנים קודמות'
     sheet[f'I{total_row}'] = round_half_up(total_ils)
     _style_totals_row(sheet, total_row, col_start, col_end, TOTAL_FILL)
@@ -922,7 +883,7 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
 
 def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
                          dividends_list, cpi_extraction_succeeded, other_fees_data,
-                         prior_year_wht=None):
+                         unmatched_wht=None):
     template_file = os.path.dirname(os.path.abspath(__file__)) + '/tax_forms_template.xlsx'
     xfile = openpyxl.load_workbook(template_file)
 
@@ -982,9 +943,9 @@ def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_
                           PatternFill(start_color='BFBFBF', end_color='BFBFBF', fill_type='solid'))
 
         # Prior-year withholding tax table (separate block below)
-        if prior_year_wht:
+        if unmatched_wht:
             prior_start = year_row + 2
-            _write_prior_year_withholding_table(sheet, prior_year_wht, prior_start, DIV_COL_START, DIV_COL_END)
+            _write_unmatched_wht_table(sheet, unmatched_wht, prior_start, DIV_COL_START, DIV_COL_END)
 
     # Other Fees & Interest sheet
     _write_other_fees_sheet(xfile, other_fees_data)
@@ -1013,24 +974,18 @@ def _extract_all(file_dir, csv_file_name, verbosity, date_slash_format):
 
 def generate_tax_forms(file_dir, csv_file_name, verbosity=0):
     try:
-        trades, dividends, fees = _extract_all(
+        trades, dividends_tuple, fees = _extract_all(
             file_dir, csv_file_name, verbosity, 'normal')
     except ValueError:
         print("*** failed to use date_slash_format='normal', attempting date_slash_format='USA'")
-        trades, dividends, fees = _extract_all(
+        trades, dividends_tuple, fees = _extract_all(
             file_dir, csv_file_name, verbosity, 'USA')
 
     closed_lots_list, inds_sorted_close_dates, cpi_extraction_succeeded = trades
-
-    try:
-        prior_year_wht = extract_prior_year_withholding_from_csv(
-            file_dir, csv_file_name, verbosity=verbosity, date_slash_format='normal')
-    except ValueError:
-        prior_year_wht = extract_prior_year_withholding_from_csv(
-            file_dir, csv_file_name, verbosity=verbosity, date_slash_format='USA')
+    dividends_list, unmatched_wht = dividends_tuple
 
     write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
-                         dividends, cpi_extraction_succeeded, fees, prior_year_wht=prior_year_wht)
+                         dividends_list, cpi_extraction_succeeded, fees, unmatched_wht=unmatched_wht)
     print('Finished generating tax forms.')
 
 
