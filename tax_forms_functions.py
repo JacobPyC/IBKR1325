@@ -9,7 +9,6 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment
 
 from aux_functions import get_date_format, get_trades_col_names, get_dividends_col_names
-# from cpi_israel import get_israel_cpi_value  # CPI
 from exchange_rates import ExchangeRateProvider
 
 
@@ -92,18 +91,6 @@ def calculate_taxable_profit(profit, profit_trivial, profit_adjusted):
 
 
 
-# def add_cpi_fields(closed_lot_dict):  # CPI
-#     closed_lot_dict['open_cpi'] = get_israel_cpi_value(closed_lot_dict['form_open_datetime'])  # CPI
-#     closed_lot_dict['close_cpi'] = get_israel_cpi_value(closed_lot_dict['tax_event_datetime'])  # CPI
-#     closed_lot_dict['cpi_ratio'] = closed_lot_dict['close_cpi'] / closed_lot_dict['open_cpi']  # CPI
-#     closed_lot_dict['open_value_ILS_adjusted_cpi'] = (  # CPI
-#         closed_lot_dict['open_value_ILS'] * closed_lot_dict['cpi_ratio']  # CPI
-#     )  # CPI
-#     closed_lot_dict['profit_ILS_cpi'] = calculate_taxable_profit(  # CPI
-#         closed_lot_dict['profit'],  # CPI
-#         closed_lot_dict['profit_trivial_ILS'],  # CPI
-#         closed_lot_dict['close_value_ILS'] - closed_lot_dict['open_value_ILS_adjusted_cpi'],  # CPI
-#     )  # CPI
 
 
 
@@ -293,7 +280,6 @@ def flush_closing_trade(closing_trade, closed_lot_trades, closed_lots_list, clos
     multiplier = get_multiplier(closed_lot_trades[0]['asset_category'])
     opening_resolutions = resolve_opening_info(closed_lot_trades, opening_orders or [], multiplier)
     total_closed_quantity = sum(abs(t['quantity']) for t in closed_lot_trades)
-    cpi_extraction_succeeded = True
     for closed_lot_trade, opening_resolution in zip(closed_lot_trades, opening_resolutions):
         allocated_close_fee = (
             closing_trade['fee'] * abs(closed_lot_trade['quantity']) / total_closed_quantity
@@ -301,14 +287,8 @@ def flush_closing_trade(closing_trade, closed_lot_trades, closed_lots_list, clos
         )
         closed_lot_dict = build_closed_lot_dict(
             closed_lot_trade, closing_trade, allocated_close_fee, col_names, rate_provider, opening_resolution)
-        # try:  # CPI
-        #     add_cpi_fields(closed_lot_dict)  # CPI
-        # except Exception:  # CPI
-        #     print("*** failed to extract CPI data, skipping it because it is used only for educational purpose.")  # CPI
-        #     cpi_extraction_succeeded = False  # CPI
         closed_lots_list.append(closed_lot_dict)
         closed_lots_datetime_list.append(closed_lot_dict['tax_event_datetime'])
-    return cpi_extraction_succeeded
 
 
 # ---------------------------------------------------------------------------
@@ -319,13 +299,11 @@ def extract_trades_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slas
     rate_provider = ExchangeRateProvider()
     col_names = get_trades_col_names(csv_file)
 
-    cpi_extraction_succeeded = False
     closed_lots_list = []
     closed_lots_datetime_list = []
     inds_sorted_close_dates = []
 
     if col_names:
-        cpi_extraction_succeeded = True
 
         # Pass 1: collect all closing trades and opening orders from CSV
         closing_trade_pairs = []  # list of (closing_trade, closed_lot_trades)
@@ -414,10 +392,6 @@ def extract_trades_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slas
                     f"profit={d['profit']}, forex rate open={d['open_currency_factor']}, "
                     f"close={d['close_currency_factor']}"
                 )
-                # if cpi_extraction_succeeded:  # CPI
-                #     msg += (  # CPI
-                #         f", cpi open={d['open_cpi']}, close={d['close_cpi']}, ratio={d['cpi_ratio']}"  # CPI
-                #     )  # CPI
                 print(msg)
 
         inds_sorted_close_dates = sorted(
@@ -426,7 +400,7 @@ def extract_trades_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slas
 
     else:
         print('no trades exist in the file.')
-    return closed_lots_list, inds_sorted_close_dates, cpi_extraction_succeeded
+    return closed_lots_list, inds_sorted_close_dates
 
 
 def extract_dividends_data_from_csv(file_dir, csv_file_name, verbosity=0, date_slash_format='normal'):
@@ -676,10 +650,6 @@ def _write_capital_gains_half(sheet, sheet_name, closed_lots_list, inds_sorted_c
             sheet['L' + str(num_row)] = d['open_value_ILS_adjusted_forex']
             profit_ILS_name = 'profit_ILS_forex'
 
-        # elif sheet_name == 'Capital Gains (CPI adjusted)':  # CPI
-        #     sheet['K' + str(num_row)] = d.get('cpi_ratio', '')  # CPI
-        #     sheet['L' + str(num_row)] = d.get('open_value_ILS_adjusted_cpi', '')  # CPI
-        #     profit_ILS_name = 'profit_ILS_cpi'  # CPI
         else:
             raise ValueError('invalid sheet_name', sheet_name)
 
@@ -882,8 +852,7 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
 
 
 def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
-                         dividends_list, cpi_extraction_succeeded, other_fees_data,
-                         unmatched_wht=None):
+                         dividends_list, other_fees_data, unmatched_wht=None):
     template_file = os.path.dirname(os.path.abspath(__file__)) + '/tax_forms_template.xlsx'
     xfile = openpyxl.load_workbook(template_file)
 
@@ -894,8 +863,6 @@ def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_
     # Capital Gains sheets
     if closed_lots_list:
         sheet_names = ['Capital Gains (FOREX adjusted)']
-        # if cpi_extraction_succeeded:  # CPI
-        #     sheet_names.append('Capital Gains (CPI adjusted)')  # CPI
 
         for sheet_name in sheet_names:
             sheet = xfile[sheet_name]
@@ -981,11 +948,11 @@ def generate_tax_forms(file_dir, csv_file_name, verbosity=0):
         trades, dividends_tuple, fees = _extract_all(
             file_dir, csv_file_name, verbosity, 'USA')
 
-    closed_lots_list, inds_sorted_close_dates, cpi_extraction_succeeded = trades
+    closed_lots_list, inds_sorted_close_dates = trades
     dividends_list, unmatched_wht = dividends_tuple
 
     write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
-                         dividends_list, cpi_extraction_succeeded, fees, unmatched_wht=unmatched_wht)
+                         dividends_list, fees, unmatched_wht=unmatched_wht)
     print('Finished generating tax forms.')
 
 
