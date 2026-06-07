@@ -693,15 +693,7 @@ def _write_dividends_half(sheet, dividends_list, half_label, start_row):
             continue
 
         num_row = start_row + ind_line  
-        print(
-        f"DIVIDEND WRITE: sheet=Dividends "
-        f"half={half_label} "
-        f"excel_row={num_row} "
-        f"ticker={d['ticker']} "
-        f"date={d['date']} "
-        f"dividend={d['dividend']} "
-        f"tax={d['withholding_tax']}"
-        )
+A
 
         sheet['B' + str(num_row)] = ind_line + 1
         sheet['C' + str(num_row)] = d['date']
