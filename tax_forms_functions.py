@@ -622,7 +622,6 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
         t = sheet.cell(row=row_num, column=18, value=value)
         t.fill, t.font, t.alignment = fill, font, RIGHT
 
-
 def write_tax_form_files(file_dir, csv_file_name, closed_lots_list, inds_sorted_close_dates,
                          dividends_list, other_fees_data, unmatched_wht=None):
     template_file = os.path.dirname(os.path.abspath(__file__)) + '/tax_forms_template.xlsx'
