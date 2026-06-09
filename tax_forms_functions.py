@@ -611,7 +611,7 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
         (10, 'הפסד מחצית שנייה',             round_half_up(abs(h2_loss)),                                   H2_FILL,    DATA_FONT),
         (11, 'סכום מכירות מחצית שנייה',      round_half_up(h2_sell),                                        H2_FILL,    DATA_FONT),
         (12, 'רווח כולל שנתי',               round_half_up(h1_profit + h2_profit),                          YEAR_FILL,  DATA_FONT),
-        (13, '(56/256)הפסד כולל שנתי',      round_half_up(abs(h1_loss + h2_loss)),                         YEAR_FILL,  DATA_FONT),
+        (13, 'הפסד כולל שנתי',      round_half_up(abs(h1_loss + h2_loss)),                         YEAR_FILL,  DATA_FONT),
         (14, 'מכירות שנתי',                  round_half_up(h1_sell + h2_sell),                              YEAR_FILL,  DATA_FONT),
         (15, 'רווח שנתי לאחר קיזוז הפסדים', round_half_up((h1_profit + h2_profit) + (h1_loss + h2_loss)), YEAR_FILL,  DATA_FONT),
     ]
