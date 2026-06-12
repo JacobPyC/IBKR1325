@@ -604,15 +604,15 @@ def _write_cg_summary_table(sheet, h1_profit, h1_loss, h1_sell, h2_profit, h2_lo
 
     rows = [
         (5,  'סיכום',                        None,                                                          TITLE_FILL, TITLE_FONT),
-        (6,  'רווח מחצית ראשונה',            round_half_up(h1_profit),                                      H1_FILL,    DATA_FONT),
-        (7,  'הפסד מחצית ראשונה',            round_half_up(abs(h1_loss)),                                   H1_FILL,    DATA_FONT),
-        (8,  'סכום מכירות מחצית ראשונה',     round_half_up(h1_sell),                                        H1_FILL,    DATA_FONT),
-        (9,  'רווח מחצית שנייה',             round_half_up(h2_profit),                                      H2_FILL,    DATA_FONT),
-        (10, 'הפסד מחצית שנייה',             round_half_up(abs(h2_loss)),                                   H2_FILL,    DATA_FONT),
-        (11, 'סכום מכירות מחצית שנייה',      round_half_up(h2_sell),                                        H2_FILL,    DATA_FONT),
+        (6,  '(קוד 13)רווח מחצית ראשונה',            round_half_up(h1_profit),                                      H1_FILL,    DATA_FONT),
+        (7,  'הפסד מחצית ראשונה(קוד 33)',            round_half_up(abs(h1_loss)),                                   H1_FILL,    DATA_FONT),
+        (8,  'סכום מכירות מחצית ראשונה(קוד 56)',     round_half_up(h1_sell),                                        H1_FILL,    DATA_FONT),
+        (9,  '(קוד 13)רווח מחצית שנייה',             round_half_up(h2_profit),                                      H2_FILL,    DATA_FONT),
+        (10, 'הפסד מחצית שנייה(קוד 33)',             round_half_up(abs(h2_loss)),                                   H2_FILL,    DATA_FONT),
+        (11, 'סכום מכירות מחצית שנייה(קוד56)',      round_half_up(h2_sell),                                        H2_FILL,    DATA_FONT),
         (12, 'רווח כולל שנתי',               round_half_up(h1_profit + h2_profit),                          YEAR_FILL,  DATA_FONT),
         (13, 'הפסד כולל שנתי',      round_half_up(abs(h1_loss + h2_loss)),                         YEAR_FILL,  DATA_FONT),
-        (14, 'מכירות שנתי',                  round_half_up(h1_sell + h2_sell),                              YEAR_FILL,  DATA_FONT),
+        (14, 'מכירות שנתי(קוד 256)',                  round_half_up(h1_sell + h2_sell),                              YEAR_FILL,  DATA_FONT),
         (15, 'רווח שנתי לאחר קיזוז הפסדים', round_half_up((h1_profit + h2_profit) + (h1_loss + h2_loss)), YEAR_FILL,  DATA_FONT),
     ]
 
